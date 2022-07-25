@@ -11,7 +11,9 @@ package redpanda
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -19,8 +21,11 @@ import (
 	"github.com/redpanda-data/console/backend/pkg/kafka"
 	"github.com/redpanda-data/console/backend/pkg/schema"
 	redpandav1alpha1 "github.com/redpanda-data/redpanda/src/go/k8s/apis/redpanda/v1alpha1"
+	adminutils "github.com/redpanda-data/redpanda/src/go/k8s/pkg/admin"
 	"github.com/redpanda-data/redpanda/src/go/k8s/pkg/labels"
 	"github.com/redpanda-data/redpanda/src/go/k8s/pkg/resources"
+	"github.com/redpanda-data/redpanda/src/go/k8s/pkg/resources/certmanager"
+	"github.com/redpanda-data/redpanda/src/go/rpk/pkg/api/admin"
 	"gopkg.in/yaml.v3"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -49,8 +54,10 @@ const (
 // ConsoleReconciler reconciles a Console object
 type ConsoleReconciler struct {
 	client.Client
-	Log           logr.Logger
-	RuntimeScheme *runtime.Scheme
+	clusterDomain         string
+	Log                   logr.Logger
+	RuntimeScheme         *runtime.Scheme
+	AdminAPIClientFactory adminutils.AdminAPIClientFactory
 }
 
 //+kubebuilder:rbac:groups=redpanda.vectorized.io,resources=consoles,verbs=get;list;watch;create;update;patch;delete
@@ -78,6 +85,11 @@ func (r *ConsoleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	if err := r.createConfigMap(ctx, &cluster, &console, log); err != nil {
+		var e *resources.RequeueAfterError
+		if errors.As(err, &e) {
+			log.Info(e.Error())
+			return ctrl.Result{RequeueAfter: e.RequeueAfter}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("setting Console configuration: %w", err)
 	}
 
@@ -194,6 +206,44 @@ func (r *ConsoleReconciler) createServiceAccount(ctx context.Context, console *r
 	return nil
 }
 
+func (r *ConsoleReconciler) createSASLUser(ctx context.Context, cluster *redpandav1alpha1.Cluster, console *redpandav1alpha1.Console, log logr.Logger) (username, password string, err error) {
+	consoleSu := resources.NewSuperUsers(r.Client, console, r.RuntimeScheme, resources.ScramConsoleUsername, resources.ConsoleSuffix, log)
+	if err := consoleSu.Ensure(ctx); err != nil {
+		return username, password, fmt.Errorf("ensuring console su secret: %w", err)
+	}
+
+	headlessSvc := resources.NewHeadlessService(r.Client, cluster, r.RuntimeScheme, nil, log)
+	clusterSvc := resources.NewClusterService(r.Client, cluster, r.RuntimeScheme, nil, log)
+	fqdn := headlessSvc.HeadlessServiceFQDN(r.clusterDomain)
+	pki := certmanager.NewPki(r.Client, cluster, fqdn, clusterSvc.ServiceFQDN(r.clusterDomain), r.RuntimeScheme, log)
+
+	adminTLSConfigProvider := pki.AdminAPIConfigProvider()
+	adminAPI, err := r.AdminAPIClientFactory(ctx, r, cluster, fqdn, adminTLSConfigProvider)
+	if err != nil {
+		return username, password, fmt.Errorf("creating AdminAPIClient: %w", err)
+	}
+
+	var secret corev1.Secret
+	err = r.Get(ctx, consoleSu.Key(), &secret)
+	if err != nil {
+		return username, password, fmt.Errorf("fetching Secret (%s) from namespace (%s): %w", consoleSu.Key().Name, consoleSu.Key().Namespace, err)
+	}
+
+	username = string(secret.Data[corev1.BasicAuthUsernameKey])
+	password = string(secret.Data[corev1.BasicAuthPasswordKey])
+
+	err = adminAPI.CreateUser(ctx, username, password, admin.ScramSha256)
+	// {"message": "Creating user: User already exists", "code": 400}
+	if err != nil && !strings.Contains(err.Error(), "already exists") { // TODO if user already exists, we only receive "400". Check for specific error code when available.
+		return username, password, &resources.RequeueAfterError{
+			RequeueAfter: resources.RequeueDuration,
+			Msg:          fmt.Sprintf("could not create user: %v", err),
+		}
+	}
+
+	return username, password, nil
+}
+
 func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redpandav1alpha1.Cluster, console *redpandav1alpha1.Console, log logr.Logger) error {
 	kafkaAPI := rpCluster.InternalListener()
 	if kafkaAPI == nil {
@@ -208,6 +258,11 @@ func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redp
 	clientID := fmt.Sprintf("redpanda-console-%s-%s", console.Name, console.Namespace)
 	if console.Spec.ClientID != "" {
 		clientID = console.Spec.ClientID
+	}
+
+	username, password, err := r.createSASLUser(ctx, rpCluster, console, log)
+	if err != nil {
+		return fmt.Errorf("creating console SASL user: %w", err)
 	}
 
 	kafkaConfig := kafka.Config{
@@ -228,8 +283,8 @@ func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redp
 		},
 		SASL: kafka.SASLConfig{
 			Enabled:   rpCluster.Spec.EnableSASL,
-			Username:  "",
-			Password:  "",
+			Username:  username,
+			Password:  password,
 			Mechanism: kafka.SASLMechanismScramSHA256,
 		},
 	}
@@ -446,6 +501,14 @@ func getDeploymentStrategy(console *redpandav1alpha1.Console) v1.DeploymentStrat
 			},
 		},
 	}
+}
+
+// WithClusterDomain set the clusterDomain
+func (r *ConsoleReconciler) WithClusterDomain(
+	clusterDomain string,
+) *ConsoleReconciler {
+	r.clusterDomain = clusterDomain
+	return r
 }
 
 // SetupWithManager sets up the controller with the Manager.
