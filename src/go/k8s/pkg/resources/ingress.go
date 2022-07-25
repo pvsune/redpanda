@@ -27,7 +27,7 @@ import (
 const (
 	nginx = "nginx"
 	//nolint:gosec // This value does not contain credentials.
-	sslPassthroughAnnotation = "nginx.ingress.kubernetes.io/ssl-passthrough"
+	SSLPassthroughAnnotation = "nginx.ingress.kubernetes.io/ssl-passthrough"
 )
 
 var _ Resource = &IngressResource{}
@@ -36,18 +36,19 @@ var _ Resource = &IngressResource{}
 // focusing on the internal connectivity management of redpanda cluster
 type IngressResource struct {
 	k8sclient.Client
-	scheme       *runtime.Scheme
-	pandaCluster *redpandav1alpha1.Cluster
-	host         string
-	svcName      string
-	svcPortName  string
-	logger       logr.Logger
+	scheme      *runtime.Scheme
+	object      metav1.Object
+	host        string
+	svcName     string
+	svcPortName string
+	annotations map[string]string
+	logger      logr.Logger
 }
 
 // NewIngress creates IngressResource
 func NewIngress(
 	client k8sclient.Client,
-	pandaCluster *redpandav1alpha1.Cluster,
+	object metav1.Object,
 	scheme *runtime.Scheme,
 	host string,
 	svcName string,
@@ -57,14 +58,25 @@ func NewIngress(
 	return &IngressResource{
 		client,
 		scheme,
-		pandaCluster,
+		object,
 		host,
 		svcName,
 		svcPortName,
+		nil,
 		logger.WithValues(
 			"Kind", ingressKind(),
 		),
 	}
+}
+
+const (
+	debugLogLevel = 4
+)
+
+// WithAnnotations sets annotations to the IngressResource
+func (r *IngressResource) WithAnnotations(annot map[string]string) *IngressResource {
+	r.annotations = annot
+	return r
 }
 
 // Ensure will manage kubernetes Ingress for redpanda.vectorized.io custom resource
@@ -91,9 +103,13 @@ func (r *IngressResource) Ensure(ctx context.Context) error {
 }
 
 func (r *IngressResource) obj() (k8sclient.Object, error) {
-	objLabels := labels.ForCluster(r.pandaCluster)
 	ingressClassName := nginx
 	pathTypePrefix := netv1.PathTypePrefix
+
+	objLabels, err := objectLabels(r.object)
+	if err != nil {
+		return nil, fmt.Errorf("cannot get object labels: %w", err)
+	}
 
 	ingress := &netv1.Ingress{
 		TypeMeta: metav1.TypeMeta{
@@ -104,7 +120,7 @@ func (r *IngressResource) obj() (k8sclient.Object, error) {
 			Name:        r.Key().Name,
 			Namespace:   r.Key().Namespace,
 			Labels:      objLabels,
-			Annotations: map[string]string{sslPassthroughAnnotation: "true"},
+			Annotations: r.annotations,
 		},
 		Spec: netv1.IngressSpec{
 			IngressClassName: &ingressClassName,
@@ -134,7 +150,7 @@ func (r *IngressResource) obj() (k8sclient.Object, error) {
 		},
 	}
 
-	err := controllerutil.SetControllerReference(r.pandaCluster, ingress, r.scheme)
+	err = controllerutil.SetControllerReference(r.object, ingress, r.scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -144,10 +160,23 @@ func (r *IngressResource) obj() (k8sclient.Object, error) {
 
 // Key returns namespace/name object that is used to identify object.
 func (r *IngressResource) Key() types.NamespacedName {
-	return types.NamespacedName{Name: r.pandaCluster.Name, Namespace: r.pandaCluster.Namespace}
+	return types.NamespacedName{Name: r.object.GetName(), Namespace: r.object.GetNamespace()}
 }
 
 func ingressKind() string {
 	var obj netv1.Ingress
 	return obj.Kind
+}
+
+func objectLabels(obj metav1.Object) (labels.CommonLabels, error) {
+	var objLabels labels.CommonLabels
+	switch obj.(type) {
+	case *redpandav1alpha1.Cluster:
+		objLabels = labels.ForCluster(obj.(*redpandav1alpha1.Cluster))
+	case *redpandav1alpha1.Console:
+		objLabels = labels.ForConsole(obj.(*redpandav1alpha1.Console))
+	default:
+		return nil, fmt.Errorf("expected object to be Cluster or Console")
+	}
+	return objLabels, nil
 }
