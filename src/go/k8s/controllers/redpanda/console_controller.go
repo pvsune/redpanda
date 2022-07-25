@@ -24,6 +24,7 @@ import (
 	"gopkg.in/yaml.v3"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -31,6 +32,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
 const (
@@ -74,6 +78,11 @@ func (r *ConsoleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		Namespace: console.Spec.ClusterKeyRef.Namespace,
 		Name:      console.Spec.ClusterKeyRef.Name,
 	}, &cluster); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(debugLogLevel).Info("retrieving Cluster custom resource failed", "clusterName", console.Spec.ClusterKeyRef.Name, "message", err)
+			console.Status.SetCondition(redpandav1alpha1.ConsoleAvailableConditionType, corev1.ConditionFalse, "ClusterNotFound", fmt.Sprintf("Cluster: %s is not found in namespace: %s", console.Spec.ClusterKeyRef.Name, console.Spec.ClusterKeyRef.Namespace))
+			return ctrl.Result{}, r.Status().Update(ctx, &console)
+		}
 		return ctrl.Result{}, fmt.Errorf("retrieving Cluster customer resource: %w", err)
 	}
 
@@ -97,7 +106,9 @@ func (r *ConsoleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("setting Console deployment: %w", err)
 	}
 
-	return ctrl.Result{}, nil
+	// No need to check if SetCondition changed the status; if no changes were made, update() won't do anything and the reconciliation will stop
+	console.Status.SetCondition(redpandav1alpha1.ConsoleAvailableConditionType, corev1.ConditionTrue, "ConsoleResourcesCreated", "All Console resources are successfully created.")
+	return ctrl.Result{}, r.Status().Update(ctx, &console)
 }
 
 func (r *ConsoleReconciler) createIngress(ctx context.Context, cluster *redpandav1alpha1.Cluster, console *redpandav1alpha1.Console, log logr.Logger) error {
@@ -450,9 +461,35 @@ func getDeploymentStrategy(console *redpandav1alpha1.Console) v1.DeploymentStrat
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ConsoleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	var (
+		ctx                = context.Background()
+		clusterKeyRefField = "spec.clusterKeyRef.name"
+	)
+	if err := mgr.GetFieldIndexer().IndexField(ctx, &redpandav1alpha1.Console{}, clusterKeyRefField, func(o client.Object) []string {
+		return []string{o.(*redpandav1alpha1.Console).Spec.ClusterKeyRef.Name}
+	}); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&redpandav1alpha1.Console{}).
-		Owns(&redpandav1alpha1.Cluster{}).
+		Watches(
+			&source.Kind{Type: &redpandav1alpha1.Cluster{}},
+			handler.EnqueueRequestsFromMapFunc(func(a client.Object) []reconcile.Request {
+				requests := []reconcile.Request{}
+				consoles := &redpandav1alpha1.ConsoleList{}
+				if err := mgr.GetClient().List(ctx, consoles, client.MatchingFields{clusterKeyRefField: a.GetName()}, client.InNamespace(a.GetNamespace())); err != nil {
+					mgr.GetLogger().V(debugLogLevel).Info("Listing consoles with matching fields failed", "fieldName", clusterKeyRefField, "fieldValue", a.GetName(), "namespace", a.GetNamespace(), "message", err)
+					return requests
+				}
+				for _, c := range consoles.Items {
+					requests = append(requests, reconcile.Request{
+						NamespacedName: types.NamespacedName{Name: c.GetName(), Namespace: c.GetNamespace()},
+					})
+				}
+				return requests
+			}),
+		).
 		Complete(r)
 }
 

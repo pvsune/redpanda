@@ -68,6 +68,73 @@ type Deployment struct {
 
 // ConsoleStatus defines the observed state of Console
 type ConsoleStatus struct {
+	// Current state of the console.
+	// +optional
+	Conditions []ConsoleCondition `json:"conditions,omitempty"`
+}
+
+// ConsoleConditionType is a valid value for ConsoleCondition.Type
+type ConsoleConditionType string
+
+// These are valid conditions of the console.
+const (
+	// ConsoleAvailableConditionType indicates that all Console resources are created but does not mean ready
+	ConsoleAvailableConditionType ConsoleConditionType = "ConsoleAvailable"
+)
+
+// Condition contains details for the current conditions of the resource
+type ConsoleCondition struct {
+	// Type is the type of the condition
+	Type ConsoleConditionType `json:"type"`
+	// Status is the status of the condition
+	Status corev1.ConditionStatus `json:"status"`
+	// Last time the condition transitioned from one status to another
+	// +optional
+	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
+	// Unique, one-word, CamelCase reason for the condition's last transition
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// Human-readable message indicating details about last transition
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
+// GetCondition return the condition of the given type
+func (s *ConsoleStatus) GetCondition(cType ConsoleConditionType) *ConsoleCondition {
+	for i := range s.Conditions {
+		if s.Conditions[i].Type == cType {
+			return &s.Conditions[i]
+		}
+	}
+	return nil
+}
+
+// SetCondition allows setting a condition of a given type.
+// In case of change in any value other than the lastTransitionTime, the lastTransitionTime
+// field will be set to the current timestamp. The return value indicates if a change has happened.
+func (s *ConsoleStatus) SetCondition(cType ConsoleConditionType, status corev1.ConditionStatus, reason, message string) bool {
+	update := func(c *ConsoleCondition) bool {
+		changed := c.Status != status || c.Reason != reason || c.Message != message
+		if changed {
+			c.LastTransitionTime = metav1.Now()
+		}
+		c.Type = cType
+		c.Status = status
+		c.Reason = reason
+		c.Message = message
+		return changed
+	}
+	// Try updating existing condition
+	for i := range s.Conditions {
+		if s.Conditions[i].Type == cType {
+			return update(&s.Conditions[i])
+		}
+	}
+	// Add a new one if missing
+	newCond := ConsoleCondition{}
+	update(&newCond)
+	s.Conditions = append(s.Conditions, newCond)
+	return true
 }
 
 //+kubebuilder:object:root=true
