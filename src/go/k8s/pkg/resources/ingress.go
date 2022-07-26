@@ -82,6 +82,7 @@ func (r *IngressResource) WithAnnotations(annot map[string]string) *IngressResou
 // Ensure will manage kubernetes Ingress for redpanda.vectorized.io custom resource
 func (r *IngressResource) Ensure(ctx context.Context) error {
 	if r.host == "" {
+		r.logger.V(debugLogLevel).Info("host not found, skip ensuring ingress")
 		return nil
 	}
 

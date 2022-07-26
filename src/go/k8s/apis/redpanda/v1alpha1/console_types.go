@@ -23,10 +23,11 @@ import (
 
 // ConsoleSpec defines the desired state of Console
 type ConsoleSpec struct {
-	Console console.Config  `json:"console"`
-	Connect connect.Config  `json:"connect"`
-	REST    rest.Config     `json:"server"`
-	Logger  *logging.Config `json:"logger,omitempty"`
+	Console   console.Config  `json:"console"`
+	Connect   connect.Config  `json:"connect"`
+	REST      rest.Config     `json:"server"`
+	Subdomain string          `json:"subdomain,omitempty"`
+	Logger    *logging.Config `json:"logger,omitempty"`
 
 	MessagePack msgpack.Config `json:"messagePack"`
 	Protobuf    proto.Config   `json:"protobuf"`

@@ -44,6 +44,7 @@ const (
 
 	configMount = "config"
 	configPath  = "/etc/console/configs/config.yaml"
+	svcPortName = "http"
 )
 
 // ConsoleReconciler reconciles a Console object
@@ -89,7 +90,7 @@ func (r *ConsoleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("setting Console service: %w", err)
 	}
 
-	if err := r.createIngress(ctx, &cluster, &console, log); err != nil {
+	if err := r.createIngress(ctx, &console, log); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting Console ingress: %w", err)
 	}
 
@@ -100,8 +101,17 @@ func (r *ConsoleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{}, nil
 }
 
-func (r *ConsoleReconciler) createIngress(ctx context.Context, cluster *redpandav1alpha1.Cluster, console *redpandav1alpha1.Console, log logr.Logger) error {
-	return nil
+func (r *ConsoleReconciler) createIngress(ctx context.Context, console *redpandav1alpha1.Console, log logr.Logger) error {
+	ingress := resources.NewIngress(
+		r.Client,
+		console,
+		r.RuntimeScheme,
+		console.Spec.Subdomain,
+		console.GetName(),
+		svcPortName,
+		log,
+	)
+	return ingress.Ensure(ctx)
 }
 
 func (r *ConsoleReconciler) createService(ctx context.Context, console *redpandav1alpha1.Console, log logr.Logger) error {
@@ -121,13 +131,13 @@ func (r *ConsoleReconciler) createService(ctx context.Context, console *redpanda
 			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{
 				{
-					Name:        "http",
+					Name:        svcPortName,
 					Protocol:    "TCP",
 					AppProtocol: &httpAppProtocol,
 					Port:        int32(console.Spec.REST.HTTPListenPort),
 					TargetPort: intstr.IntOrString{
 						Type:   intstr.String,
-						StrVal: "http",
+						StrVal: svcPortName,
 					},
 				},
 			},
