@@ -13,6 +13,7 @@ require (
 	github.com/onsi/ginkgo v1.16.4
 	github.com/onsi/gomega v1.15.0
 	github.com/prometheus/client_golang v1.12.2
+	github.com/redpanda-data/console/backend v0.0.0-20220715135434-7c5287684c5a
 	github.com/redpanda-data/redpanda/src/go/rpk v0.0.0-00010101000000-000000000000
 	github.com/spf13/afero v1.6.0
 	github.com/stretchr/testify v1.7.0
@@ -94,7 +95,6 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.35.0 // indirect
 	github.com/prometheus/procfs v0.7.3 // indirect
-	github.com/redpanda-data/console/backend v0.0.0-20220715135434-7c5287684c5a // indirect
 	github.com/sergi/go-diff v1.2.0 // indirect
 	github.com/sethgrid/pester v1.1.0 // indirect
 	github.com/sirupsen/logrus v1.7.0 // indirect

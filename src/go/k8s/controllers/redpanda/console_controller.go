@@ -14,9 +14,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/cloudhut/common/logging"
+	"github.com/cloudhut/common/rest"
 	"github.com/go-logr/logr"
 	"github.com/redpanda-data/console/backend/pkg/api"
+	"github.com/redpanda-data/console/backend/pkg/connect"
+	consoleBackend "github.com/redpanda-data/console/backend/pkg/console"
+	"github.com/redpanda-data/console/backend/pkg/filesystem"
+	"github.com/redpanda-data/console/backend/pkg/git"
 	"github.com/redpanda-data/console/backend/pkg/kafka"
+	"github.com/redpanda-data/console/backend/pkg/msgpack"
+	"github.com/redpanda-data/console/backend/pkg/proto"
 	"github.com/redpanda-data/console/backend/pkg/schema"
 	redpandav1alpha1 "github.com/redpanda-data/redpanda/src/go/k8s/apis/redpanda/v1alpha1"
 	"github.com/redpanda-data/redpanda/src/go/k8s/pkg/labels"
@@ -216,9 +224,15 @@ func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redp
 		// TODO Redpanda operator does not support rack awareness
 		RackID: "",
 
-		Schema:      getSchema(rpCluster),
-		Protobuf:    console.Spec.Protobuf,
-		MessagePack: console.Spec.MessagePack,
+		Schema: getSchema(rpCluster),
+		Protobuf: proto.Config{
+			Enabled:        console.Spec.Protobuf.Enabled,
+			SchemaRegistry: console.Spec.Protobuf.SchemaRegistry,
+			Git:            git.Config(console.Spec.Protobuf.Git),
+			FileSystem:     filesystem.Config(console.Spec.Protobuf.FileSystem),
+			Mappings:       console.Spec.Protobuf.Mappings,
+		},
+		MessagePack: msgpack.Config(console.Spec.MessagePack),
 		TLS: kafka.TLSConfig{
 			Enabled:      kafkaAPI.TLS.Enabled,
 			CaFilepath:   kafkaTLSCAFilepath,
@@ -238,13 +252,18 @@ func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redp
 
 	consoleCfg.SetDefaults()
 
-	consoleCfg.Console = console.Spec.Console
-	consoleCfg.Connect = console.Spec.Connect
-	consoleCfg.REST = console.Spec.REST
+	consoleCfg.Console = consoleBackend.Config{
+		TopicDocumentation: consoleBackend.ConfigTopicDocumentation{
+			Enabled: console.Spec.Console.TopicDocumentation.Enabled,
+			Git:     git.Config(console.Spec.Console.TopicDocumentation.Git),
+		},
+	}
+	consoleCfg.Connect = connect.Config(console.Spec.Connect)
+	consoleCfg.REST = rest.Config(console.Spec.REST)
 	consoleCfg.Kafka = kafkaConfig
 
-	if console.Spec.Logger != nil {
-		consoleCfg.Logger = *console.Spec.Logger
+	if console.Spec.LogLevel != "" {
+		consoleCfg.Logger = logging.Config{LogLevelInput: console.Spec.LogLevel}
 	}
 
 	cfg, err := yaml.Marshal(consoleCfg)

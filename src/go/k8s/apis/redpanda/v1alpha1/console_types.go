@@ -10,12 +10,8 @@
 package v1alpha1
 
 import (
-	"github.com/cloudhut/common/logging"
-	"github.com/cloudhut/common/rest"
-	"github.com/redpanda-data/console/backend/pkg/connect"
-	"github.com/redpanda-data/console/backend/pkg/console"
-	"github.com/redpanda-data/console/backend/pkg/msgpack"
-	"github.com/redpanda-data/console/backend/pkg/proto"
+	"time"
+
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -23,13 +19,13 @@ import (
 
 // ConsoleSpec defines the desired state of Console
 type ConsoleSpec struct {
-	Console console.Config  `json:"console"`
-	Connect connect.Config  `json:"connect"`
-	REST    rest.Config     `json:"server"`
-	Logger  *logging.Config `json:"logger,omitempty"`
+	Console  ConsoleConfig `json:"console"`
+	Connect  ConnectConfig `json:"connect"`
+	REST     RESTConfig    `json:"server"`
+	LogLevel string        `json:"logLevel,omitempty"`
 
-	MessagePack msgpack.Config `json:"messagePack"`
-	Protobuf    proto.Config   `json:"protobuf"`
+	MessagePack MsgpackConfig `json:"messagePack"`
+	Protobuf    ProtoConfig   `json:"protobuf"`
 
 	// ClusterKeyRef references to Cluster Custom Resource which will
 	// set kafka.Config configuration in Redpanda console
@@ -40,6 +36,25 @@ type ConsoleSpec struct {
 
 	Image   string `json:"image"`
 	Version string `json:"version"`
+}
+
+// Config for a HTTP server
+// Grabbed from https://github.com/cloudhut/common
+// Added JSON tags. We can have this merged from upstream.
+type RESTConfig struct {
+	ServerGracefulShutdownTimeout time.Duration `yaml:"gracefulShutdownTimeout" json:"gracefulShutdownTimeout"`
+
+	HTTPListenAddress      string        `yaml:"listenAddress" json:"listenAddress"`
+	HTTPListenPort         int           `yaml:"listenPort" json:"listenPort"`
+	HTTPServerReadTimeout  time.Duration `yaml:"readTimeout" json:"readTimeout"`
+	HTTPServerWriteTimeout time.Duration `yaml:"writeTimeout" json:"writeTimeout"`
+	HTTPServerIdleTimeout  time.Duration `yaml:"idleTimeout" json:"idleTimeout"`
+
+	CompressionLevel int `yaml:"compressionLevel" json:"compressionLevel"`
+
+	BasePath                        string `yaml:"basePath" json:"basePath"`
+	SetBasePathFromXForwardedPrefix bool   `yaml:"setBasePathFromXForwardedPrefix" json:"setBasePathFromXForwardedPrefix"`
+	StripPrefix                     bool   `yaml:"stripPrefix" json:"stripPrefix"`
 }
 
 type Deployment struct {
