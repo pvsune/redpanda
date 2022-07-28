@@ -14,11 +14,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cloudhut/common/logging"
 	"github.com/cloudhut/common/rest"
 	"github.com/go-logr/logr"
-	"github.com/redpanda-data/console/backend/pkg/api"
 	"github.com/redpanda-data/console/backend/pkg/connect"
+	"github.com/redpanda-data/console/backend/pkg/console"
 	consoleBackend "github.com/redpanda-data/console/backend/pkg/console"
 	"github.com/redpanda-data/console/backend/pkg/filesystem"
 	"github.com/redpanda-data/console/backend/pkg/git"
@@ -202,6 +201,44 @@ func (r *ConsoleReconciler) createServiceAccount(ctx context.Context, console *r
 	return nil
 }
 
+// Config holds all (subdependency)Configs needed to run the API
+// Grabbed from https://github.com/redpanda-data/console/
+// "Console" should be serialized as "owl" not "console"
+// Custom LoggingConfig, see below
+type APIConfig struct {
+	ConfigFilepath   string
+	MetricsNamespace string `yaml:"metricsNamespace"`
+	ServeFrontend    bool   `yaml:"serveFrontend"` // useful for local development where we want the frontend from 'npm run start'
+
+	Console console.Config `yaml:"owl"`
+	Connect connect.Config `yaml:"connect"`
+	REST    rest.Config    `yaml:"server"`
+	Kafka   kafka.Config   `yaml:"kafka"`
+	Logger  LoggingConfig  `yaml:"logger"`
+}
+
+// SetDefaults for all root and child config structs
+func (c *APIConfig) SetDefaults() {
+	c.ServeFrontend = true
+	c.MetricsNamespace = "console"
+
+	c.Logger.SetDefaults()
+	c.REST.SetDefaults()
+	c.Kafka.SetDefaults()
+	c.Console.SetDefaults()
+	c.Connect.SetDefaults()
+}
+
+// Grabbed from https://github.com/cloudhut/common/logging
+// This do not serialize LogLevel from logging.Config upstream to avoid Console to err with unknown keys
+type LoggingConfig struct {
+	LogLevelInput string `yaml:"level"`
+}
+
+func (c *LoggingConfig) SetDefaults() {
+	c.LogLevelInput = "info"
+}
+
 func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redpandav1alpha1.Cluster, console *redpandav1alpha1.Console, log logr.Logger) error {
 	kafkaAPI := rpCluster.InternalListener()
 	if kafkaAPI == nil {
@@ -248,7 +285,7 @@ func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redp
 		},
 	}
 
-	consoleCfg := api.Config{}
+	consoleCfg := APIConfig{}
 
 	consoleCfg.SetDefaults()
 
@@ -263,7 +300,7 @@ func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redp
 	consoleCfg.Kafka = kafkaConfig
 
 	if console.Spec.LogLevel != "" {
-		consoleCfg.Logger = logging.Config{LogLevelInput: console.Spec.LogLevel}
+		consoleCfg.Logger = LoggingConfig{LogLevelInput: console.Spec.LogLevel}
 	}
 
 	cfg, err := yaml.Marshal(consoleCfg)
