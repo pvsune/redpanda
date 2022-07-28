@@ -43,7 +43,11 @@ const (
 
 	schemaRegistryTLSKeyFilepath  = tlsPath + "/tls.key"
 	schemaRegistryTLSCertFilepath = tlsPath + "/tls.crt"
-	schemaRegistryTLSCAFilepath   = tlsPath + "/ca.crt"
+	// We are using publicly signed certificates for TLS
+	// Console is creating a NewCertPool() which will not use host default certificates when left blank
+	// REF https://github.com/redpanda-data/console/blob/master/backend/pkg/schema/client.go#L60
+	// This should be fixed upstream
+	schemaRegistryTLSCAFilepath = "/etc/ssl/certs/ca-certificates.crt"
 
 	configMount = "config"
 	configPath  = "/etc/console/configs/config.yaml"
