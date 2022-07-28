@@ -34,13 +34,16 @@ import (
 )
 
 const (
-	kafkaTLSKeyFilepath  = "/redpanda/schema-registry/key.pem"
-	kafkaTLSCertFilepath = "/redpanda/schema-registry/crt.pem"
-	kafkaTLSCAFilepath   = "/redpanda/schema-registry/ca.pem"
+	tlsMount = "tls"
+	tlsPath  = "/redpanda/schema-registry"
 
-	schemaRegistryTLSKeyFilepath  = "/redpanda/schema-registry/key.pem"
-	schemaRegistryTLSCertFilepath = "/redpanda/schema-registry/crt.pem"
-	schemaRegistryTLSCAFilepath   = "/redpanda/schema-registry/ca.pem"
+	kafkaTLSKeyFilepath  = tlsPath + "/tls.key"
+	kafkaTLSCertFilepath = tlsPath + "/tls.crt"
+	kafkaTLSCAFilepath   = tlsPath + "/ca.crt"
+
+	schemaRegistryTLSKeyFilepath  = tlsPath + "/tls.key"
+	schemaRegistryTLSCertFilepath = tlsPath + "/tls.crt"
+	schemaRegistryTLSCAFilepath   = tlsPath + "/ca.crt"
 
 	configMount = "config"
 	configPath  = "/etc/console/configs/config.yaml"
@@ -219,6 +222,7 @@ func (r *ConsoleReconciler) createConfigMap(ctx context.Context, rpCluster *redp
 		Schema:      getSchema(rpCluster),
 		Protobuf:    console.Spec.Protobuf,
 		MessagePack: console.Spec.MessagePack,
+		// TODO: Care if kafka mTLS is enabled, mount certificates
 		TLS: kafka.TLSConfig{
 			Enabled:      kafkaAPI.TLS.Enabled,
 			CaFilepath:   kafkaTLSCAFilepath,
@@ -297,9 +301,9 @@ func getSchema(cluster *redpandav1alpha1.Cluster) schema.Config {
 
 	return schema.Config{
 		Enabled: true,
-		URLs:    []string{cluster.Status.Nodes.SchemaRegistry.Internal},
+		URLs:    []string{getSchemaRegistryURL(cluster)},
 		TLS: schema.TLSConfig{
-			Enabled:               cluster.Spec.Configuration.SchemaRegistry.TLS.Enabled,
+			Enabled:               cluster.IsSchemaRegistryTLSEnabled(),
 			CaFilepath:            schemaRegistryTLSCAFilepath,
 			CertFilepath:          schemaRegistryTLSCertFilepath,
 			KeyFilepath:           schemaRegistryTLSKeyFilepath,
@@ -311,6 +315,19 @@ func getSchema(cluster *redpandav1alpha1.Cluster) schema.Config {
 		Password:    "",
 		BearerToken: "",
 	}
+}
+
+// WANT: We should put this in Cluster API type
+func getSchemaRegistryURL(cluster *redpandav1alpha1.Cluster) string {
+	scheme := "http"
+	if cluster.IsSchemaRegistryTLSEnabled() {
+		scheme = "https"
+	}
+	host := cluster.Status.Nodes.SchemaRegistry.Internal
+	if cluster.IsSchemaRegistryExternallyAvailable() {
+		host = cluster.Status.Nodes.SchemaRegistry.External
+	}
+	return fmt.Sprintf("%s://%s", scheme, host)
 }
 
 func (r *ConsoleReconciler) createDeployment(ctx context.Context, cluster *redpandav1alpha1.Cluster, console *redpandav1alpha1.Console, log logr.Logger) error {
@@ -338,6 +355,24 @@ func (r *ConsoleReconciler) createDeployment(ctx context.Context, cluster *redpa
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
 										Name: console.Name,
+									},
+								},
+							},
+						},
+						{
+							Name: tlsMount,
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: fmt.Sprintf("%s-schema-registry-client", cluster.GetName()),
+									Items: []corev1.KeyToPath{
+										{
+											Key:  "tls.crt",
+											Path: "tls.crt",
+										},
+										{
+											Key:  "tls.key",
+											Path: "tls.key",
+										},
 									},
 								},
 							},
@@ -414,8 +449,13 @@ func getContainers(cluster *redpandav1alpha1.Cluster, console *redpandav1alpha1.
 			VolumeMounts: []corev1.VolumeMount{
 				{
 					Name:      configMount,
-					ReadOnly:  false,
+					ReadOnly:  true,
 					MountPath: configPath,
+				},
+				{
+					Name:      tlsMount,
+					ReadOnly:  true,
+					MountPath: tlsPath,
 				},
 			},
 			LivenessProbe:   console.Spec.Deployment.LivenessProbe,
