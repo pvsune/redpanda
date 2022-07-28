@@ -431,7 +431,9 @@ func getDNSPolicy(console *redpandav1alpha1.Console) corev1.DNSPolicy {
 	if console.Spec.Deployment.DNSPolicy != nil {
 		return *console.Spec.Deployment.DNSPolicy
 	}
-	return corev1.DNSDefault
+	// This is the default set by K8s. Otherwise Service DNS will not be resolvable.
+	// REF https://kubernetes.io/docs/tasks/administer-cluster/dns-debugging-resolution/#known-issues
+	return corev1.DNSClusterFirst
 }
 
 func getDeploymentStrategy(console *redpandav1alpha1.Console) v1.DeploymentStrategy {
