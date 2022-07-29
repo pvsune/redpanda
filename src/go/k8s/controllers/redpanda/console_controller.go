@@ -394,16 +394,11 @@ func (r *ConsoleReconciler) createDeployment(ctx context.Context, cluster *redpa
 }
 
 func getContainers(cluster *redpandav1alpha1.Cluster, console *redpandav1alpha1.Console) []corev1.Container {
-	var args []string
-	if cluster.Spec.EnableSASL {
-		args = append(args, "--kafka.sasl.password=$(KAFKA_SASL_PASSWORD)")
-	}
-
 	return []corev1.Container{
 		{
 			Name:  "console",
 			Image: fmt.Sprintf("%s:%s", console.Spec.Image, console.Spec.Version),
-			Args:  append(args, fmt.Sprintf("--config.filepath=%s/%s", configPath, "config.yaml")),
+			Args:  []string{fmt.Sprintf("--config.filepath=%s/%s", configPath, "config.yaml")},
 			Ports: []corev1.ContainerPort{
 				{
 					Name:          "http",
